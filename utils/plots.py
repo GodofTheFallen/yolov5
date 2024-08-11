@@ -85,7 +85,8 @@ class Annotator:
         if self.pil or not is_ascii(label):
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
             if label:
-                w, h = self.font.getsize(label)  # text width, height
+                w, h = self.font.getsize(label) # text width, height
+                # w, h = self.font.getsize(label) / 2 # text width, height
                 outside = box[1] - h >= 0  # label fits outside box
                 self.draw.rectangle(
                     (box[0], box[1] - h if outside else box[1], box[0] + w + 1,
@@ -241,7 +242,8 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                 color = colors(cls)
                 cls = names[cls] if names else cls
                 if labels or conf[j] > 0.25:  # 0.25 conf thresh
-                    label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
+                    # label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
+                    label = f'{cls}'
                     annotator.box_label(box, label, color=color)
     annotator.im.save(fname)  # save
 

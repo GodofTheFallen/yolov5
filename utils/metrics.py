@@ -15,6 +15,7 @@ import torch
 def fitness(x):
     # Model fitness as a weighted combination of metrics
     w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
+    # w = [0.25, 0.25, 0.1, 0.4]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
     return (x[:, :4] * w).sum(1)
 
 
@@ -90,7 +91,8 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, unique_classes.astype(int)
+    fn = (tp / (r + eps) - tp).round()  # false positives
+    return tp, fp, fn, p, r, f1, ap, unique_classes.astype(int)
 
 
 def compute_ap(recall, precision):
@@ -128,8 +130,13 @@ class ConfusionMatrix:
         self.nc = nc  # number of classes
         self.conf = conf
         self.iou_thres = iou_thres
+        self.tp_class_iou = np.zeros(6)
+        self.tp_class_iou_min = np.ones(6)
+        self.tp_class_conf = np.zeros(6)
+        self.tp_class_conf_min = np.ones(6)
+        self.tp_class_num = np.zeros(6)
 
-    def process_batch(self, detections, labels):
+    def process_batch(self, name, batch_i, save_dir, detections, labels):
         """
         Return intersection-over-union (Jaccard index) of boxes.
         Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
@@ -139,6 +146,12 @@ class ConfusionMatrix:
         Returns:
             None, updates confusion matrix accordingly
         """
+        if detections is None:
+            gt_classes = labels.int()
+            for gc in gt_classes:
+                self.matrix[self.nc, gc] += 1  # background FN
+            return
+
         detections = detections[detections[:, 4] > self.conf]
         gt_classes = labels[:, 0].int()
         detection_classes = detections[:, 5].int()
@@ -155,19 +168,84 @@ class ConfusionMatrix:
         else:
             matches = np.zeros((0, 3))
 
+        # open txt to save result
+        split_line = "————————————————————————————————————————————" + "\n"
+        name_line = "误检漏检的图片id: " + name + "  batch_id  " + str(batch_i) + "\n"
+        column_name = "预测类别" + "  " + "真实类别" + "\n"
+        class_name = ['0', 'person', 'bike', 'car', 'bus', 'truck', 'background']
+        predict_class = ""
+        label_class = ""
+        save_dir = save_dir / "false_results.txt"
+        # f = open(save_dir, "a")
+        # f.write(split_line)
+        # f.write(name_line)
+        # f.write(column_name)
+
+
+        # print("detections:\n", detections)
+        # print("detection_classes:\n", detection_classes)
+        # print("gt_classes:\n", gt_classes)
+        # print("matches:\n", matches)
+
         n = matches.shape[0] > 0
         m0, m1, _ = matches.transpose().astype(int)
-        for i, gc in enumerate(gt_classes):
-            j = m0 == i
-            if n and sum(j) == 1:
-                self.matrix[detection_classes[m1[j]], gc] += 1  # correct
-            else:
-                self.matrix[self.nc, gc] += 1  # background FP
 
+        for i in range(matches.shape[0]):
+            if gt_classes[m0[i]] == detection_classes[m1[i]]:
+                self.tp_class_num[gt_classes[m0[i]]] = self.tp_class_num[gt_classes[m0[i]]] + 1
+                self.tp_class_iou[gt_classes[m0[i]]] = self.tp_class_iou[gt_classes[m0[i]]] + matches[i, 2]
+                self.tp_class_conf[gt_classes[m0[i]]] = self.tp_class_conf[gt_classes[m0[i]]] + detections[int(matches[i, 1]), 4]
+                if self.tp_class_iou_min[gt_classes[m0[i]]] > matches[i, 2]:
+                    self.tp_class_iou_min[gt_classes[m0[i]]] = matches[i, 2]
+                if self.tp_class_conf_min[gt_classes[m0[i]]] > detections[int(matches[i, 1]), 4]:
+                    self.tp_class_conf_min[gt_classes[m0[i]]] = detections[int(matches[i, 1]), 4]
+        # pdb.set_trace()
+        # print("m0:\n", m0)
+        # print("m1:\n", m1)
+        # print("----------------------------\n")
+        for i, gc in enumerate(gt_classes):
+            # print("i:\n", i)
+            # print("gc:\n", gc)
+            j = m0 == i
+            # print("j:\n", j)
+            # 5*5矩阵里的对应位置加1，有目标，有预测，主要看分类是否正确。对角线为TP，每一行为FP，每一列为FN，按列归一化为召回率
+            # 按行归一化为精确率，P和N区分靠预测，TF靠GT
+            if n and sum(j) == 1:
+                # print("m1[j]:\n", m1[j])
+                # print("detection_classes[m1[j]]:\n", detection_classes[m1[j]])
+                # print("self.matrix:\n", self.matrix)
+                self.matrix[detection_classes[m1[j]], gc] += 1  # correct
+                if detection_classes[m1[j]] != gc:
+                    predict_class = class_name[detection_classes[m1[j]]]
+                    label_class = class_name[gc]
+                    line = predict_class + "   " + label_class + "\n"
+                    # f.write(line)
+                # print("self.matrix:\n", self.matrix)
+            # 预测成背景的漏检FN，预测为背景实际为有物体gc类别
+            else:
+                # print("self.matrix:\n", self.matrix)
+                self.matrix[self.nc, gc] += 1  # true background
+                predict_class = class_name[self.nc]
+                label_class = class_name[gc]
+                line = predict_class + "   " + label_class + "\n"
+                # f.write(line)
+                # print("self.matrix:\n", self.matrix)
+        # print("----------------------------\n")
         if n:
             for i, dc in enumerate(detection_classes):
+                # print("i:\n", i)
+                # print("dc:\n", dc)
+                # 真实为背景，预测为gc类别的误检FP，
                 if not any(m1 == i):
-                    self.matrix[dc, self.nc] += 1  # background FN
+                    # print("self.matrix:\n", self.matrix)
+                    self.matrix[dc, self.nc] += 1  # predicted background
+                    predict_class = class_name[dc]
+                    label_class = class_name[self.nc]
+                    line = predict_class + "   " + label_class + "\n"
+                    # f.write(line)
+                    # print("self.matrix:\n", self.matrix)
+
+        # f.close()
 
     def matrix(self):
         return self.matrix

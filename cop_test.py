@@ -16,8 +16,8 @@ from trackers.bot_sort import BOTSORT
 
 
 
-URL = "10.130.212.190:1935"  # 服务器地址
-URL_POST = "10.130.212.190:5000"
+URL = "192.168.2.8:1935"  # 服务器地址
+URL_POST = "192.168.2.8:5000"
 AUTH = "1"  # 验证编号
 VTS = "37"  # 视频编号
 weights_path = 'weights/best.pt'  # 权重文件路径
@@ -35,7 +35,7 @@ def parse_opt():
     return parser.parse_args()
 
 
-def load_model_tracker(detect_weights='weights/best.pt', tracker_weights='weights/mars-small128.pb', device=device):
+def load_model_tracker(detect_weights='weights/best.pt', device=device):
     device = torch.device(device)
     model = DetectMultiBackend(detect_weights, device=device, dnn=False)
     model.warmup()
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     device = args.device
     if device != "cpu":
         device = "cuda:" + device
-    model, tracker = load_model_tracker(detect_weights=weights_path)  # 加载模型
+    model, tracker = load_model_tracker(detect_weights=weights_path, device=device)  # 加载模型
     data = {"auth": AUTH, "vts": VTS}
     # 调用后视频会重新开始推送
     response = requests.post(f"http://{URL_POST}/push_stream", json=data)
